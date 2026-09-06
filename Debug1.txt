@@ -1,0 +1,469 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+
+-- Main GUI
+local gui = Instance.new("ScreenGui")
+gui.Name = "PartFinderGUI"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(420, 560) -- Slightly expanded height for extra button
+frame.Position = UDim2.new(0.5, -210, 0.5, -280)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+frame.BackgroundTransparency = 0.05
+frame.Active = true
+frame.Draggable = true
+frame.Parent = gui
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 32)
+title.BackgroundTransparency = 1
+title.Text = "Part Finder"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.SourceSansBold
+title.TextSize = 22
+title.Parent = frame
+
+local inputBox = Instance.new("TextBox")
+inputBox.Position = UDim2.new(0, 10, 0, 40)
+inputBox.Size = UDim2.new(1, -80, 0, 30)
+inputBox.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+inputBox.PlaceholderText = "Insert part name..."
+inputBox.Text = "Hello!"
+inputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+inputBox.Font = Enum.Font.SourceSans
+inputBox.TextSize = 16
+inputBox.Parent = frame
+
+local searchBtn = Instance.new("TextButton")
+searchBtn.Position = UDim2.new(1, -70, 0, 40)
+searchBtn.Size = UDim2.new(0, 60, 0, 30)
+searchBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+searchBtn.Text = "Search"
+searchBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+searchBtn.Font = Enum.Font.SourceSansBold
+searchBtn.TextSize = 16
+searchBtn.Parent = frame
+
+local listFrame = Instance.new("ScrollingFrame")
+listFrame.Position = UDim2.new(0, 10, 0, 78)
+listFrame.Size = UDim2.new(1, -20, 0, 380)
+listFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+listFrame.BackgroundTransparency = 0.2
+listFrame.ScrollBarThickness = 6
+listFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+listFrame.Parent = frame
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 4)
+listLayout.Parent = listFrame
+
+listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 6)
+end)
+
+local status = Instance.new("TextLabel")
+status.Position = UDim2.new(0, 5, 1, -60)
+status.Size = UDim2.new(1, -10, 0, 24)
+status.BackgroundTransparency = 1
+status.Text = ""
+status.TextColor3 = Color3.fromRGB(200, 200, 200)
+status.Font = Enum.Font.SourceSans
+status.TextSize = 14
+status.Parent = frame
+
+-- Spawn Notifier Button
+local notifierToggleBtn = Instance.new("TextButton")
+notifierToggleBtn.Position = UDim2.new(0, 10, 1, -34)
+notifierToggleBtn.Size = UDim2.new(1, -20, 0, 28)
+notifierToggleBtn.BackgroundColor3 = Color3.fromRGB(120, 50, 200)
+notifierToggleBtn.Text = "Spawn Notifier"
+notifierToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+notifierToggleBtn.Font = Enum.Font.SourceSansBold
+notifierToggleBtn.TextSize = 16
+notifierToggleBtn.Parent = frame
+
+-- ESP State
+local lineConnection
+local linePart
+local currentTarget
+local currentESPButton
+
+local function deactivateLine()
+    if lineConnection then
+        lineConnection:Disconnect()
+        lineConnection = nil
+    end
+    if linePart then
+        linePart:Destroy()
+        linePart = nil
+    end
+    if currentESPButton then
+        currentESPButton.Text = "Line Off"
+        currentESPButton.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+    end
+    currentTarget = nil
+    currentESPButton = nil
+end
+
+local function findMatches(query)
+    query = query:gsub("^%s+", ""):gsub("%s+$", "")
+    if query == "" then return {} end
+    local matches = {}
+    for _, v in workspace:GetDescendants() do
+        if (v:IsA("BasePart") or v:IsA("Model")) and v.Name:lower() == query:lower() then
+            table.insert(matches, v)
+        end
+    end
+    return matches
+end
+
+local function getPosition(obj)
+    if obj:IsA("BasePart") then return obj.Position end
+    if obj:IsA("Model") then
+        local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+        if part then return part.Position end
+        return obj:GetBoundingBox().Position
+    end
+    return nil
+end
+
+local function getPath(obj)
+    local names = {obj.Name}
+    local parent = obj.Parent
+    while parent and parent ~= workspace do
+        table.insert(names, 1, parent.Name)
+        parent = parent.Parent
+    end
+    return table.concat(names, " / ")
+end
+
+local function toggleLine(obj, button)
+    if currentTarget == obj then
+        deactivateLine()
+        return
+    end
+
+    deactivateLine()
+    currentTarget = obj
+    currentESPButton = button
+
+    linePart = Instance.new("Part")
+    linePart.Anchored = true
+    linePart.CanCollide = false
+    linePart.CanQuery = false
+    linePart.CastShadow = false
+    linePart.Transparency = 0.15
+    linePart.Color = Color3.fromRGB(255, 40, 40)
+    linePart.Material = Enum.Material.Neon
+    linePart.Size = Vector3.new(0.15, 0.15, 1)
+    linePart.Parent = workspace
+
+    button.Text = "Line On"
+    button.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+
+    lineConnection = RunService.RenderStepped:Connect(function()
+        local char = player.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not (root and currentTarget) then return end
+
+        local bPos = getPosition(currentTarget)
+        if not bPos then return end
+
+        local aPos = root.Position
+        local dist = (aPos - bPos).Magnitude
+        local mid = (aPos + bPos) / 2
+
+        linePart.CFrame = CFrame.lookAt(mid, bPos)
+        linePart.Size = Vector3.new(0.15, 0.15, dist)
+    end)
+end
+
+local function clearResults()
+    for _, child in listFrame:GetChildren() do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+end
+
+local function addResult(obj)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, -6, 0, 64)
+    row.BackgroundColor3 = Color3.fromRGB(50, 50, 58)
+    row.Parent = listFrame
+
+    local info = Instance.new("TextLabel")
+    info.Position = UDim2.new(0, 8, 0, 4)
+    info.Size = UDim2.new(1, -160, 1, -8)
+    info.BackgroundTransparency = 1
+    info.Text = obj.Name .. "\n" .. getPath(obj)
+    info.TextColor3 = Color3.fromRGB(255, 255, 255)
+    info.Font = Enum.Font.SourceSans
+    info.TextSize = 14
+    info.TextXAlignment = Enum.TextXAlignment.Left
+    info.TextYAlignment = Enum.TextYAlignment.Top
+    info.TextWrapped = true
+    info.Parent = row
+
+    local lineBtn = Instance.new("TextButton")
+    lineBtn.Position = UDim2.new(1, -152, 0, 6)
+    lineBtn.Size = UDim2.new(0, 70, 0, 24)
+    lineBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+    lineBtn.Text = "Line Off"
+    lineBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    lineBtn.Font = Enum.Font.SourceSansBold
+    lineBtn.TextSize = 13
+    lineBtn.Parent = row
+
+    local tpBtn = Instance.new("TextButton")
+    tpBtn.Position = UDim2.new(1, -76, 0, 6)
+    tpBtn.Size = UDim2.new(0, 70, 0, 24)
+    tpBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+    tpBtn.Text = "TP"
+    tpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tpBtn.Font = Enum.Font.SourceSansBold
+    tpBtn.TextSize = 14
+    tpBtn.Parent = row
+
+    lineBtn.MouseButton1Click:Connect(function()
+        toggleLine(obj, lineBtn)
+    end)
+
+    tpBtn.MouseButton1Click:Connect(function()
+        local char = player.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local pos = getPosition(obj)
+        if root and pos then
+            root.CFrame = CFrame.new(pos)
+            status.Text = "Teleported to " .. obj.Name
+        end
+    end)
+end
+
+local function doSearch()
+    deactivateLine()
+    clearResults()
+    status.Text = ""
+    local matches = findMatches(inputBox.Text)
+
+    if #matches == 0 then
+        status.Text = "Nothing found"
+        return
+    end
+
+    for _, obj in matches do
+        addResult(obj)
+    end
+    status.Text = #matches .. " result(s)"
+end
+
+searchBtn.MouseButton1Click:Connect(doSearch)
+inputBox.FocusLost:Connect(function(enter)
+    if enter then doSearch() end
+end)
+
+-- ====================================================================
+-- SPAWN NOTIFIER LOGIC
+-- ====================================================================
+
+local notifierFrame = Instance.new("Frame")
+notifierFrame.Size = UDim2.fromOffset(300, 180)
+notifierFrame.Position = UDim2.new(0.5, -150, 0.5, -90)
+notifierFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+notifierFrame.Active = true
+notifierFrame.Draggable = true
+notifierFrame.Visible = false
+notifierFrame.Parent = gui
+
+local notifierTitle = Instance.new("TextLabel")
+notifierTitle.Size = UDim2.new(1, 0, 0, 28)
+notifierTitle.BackgroundTransparency = 1
+notifierTitle.Text = "Spawn Notifier Config"
+notifierTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+notifierTitle.Font = Enum.Font.SourceSansBold
+notifierTitle.TextSize = 18
+notifierTitle.Parent = notifierFrame
+
+local closeNotifierBtn = Instance.new("TextButton")
+closeNotifierBtn.Position = UDim2.new(1, -28, 0, 4)
+closeNotifierBtn.Size = UDim2.new(0, 24, 0, 24)
+closeNotifierBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeNotifierBtn.Text = "X"
+closeNotifierBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeNotifierBtn.Font = Enum.Font.SourceSansBold
+closeNotifierBtn.TextSize = 14
+closeNotifierBtn.Parent = notifierFrame
+
+local notifierInput = Instance.new("TextBox")
+notifierInput.Position = UDim2.new(0, 15, 0, 40)
+notifierInput.Size = UDim2.new(1, -30, 0, 30)
+notifierInput.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+notifierInput.PlaceholderText = "Target Part Name..."
+notifierInput.Text = ""
+notifierInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+notifierInput.Font = Enum.Font.SourceSans
+notifierInput.TextSize = 16
+notifierInput.Parent = notifierFrame
+
+local startNotifierBtn = Instance.new("TextButton")
+startNotifierBtn.Position = UDim2.new(0, 15, 0, 80)
+startNotifierBtn.Size = UDim2.new(1, -30, 0, 32)
+startNotifierBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+startNotifierBtn.Text = "Start Monitoring (5s Loop)"
+startNotifierBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+startNotifierBtn.Font = Enum.Font.SourceSansBold
+startNotifierBtn.TextSize = 15
+startNotifierBtn.Parent = notifierFrame
+
+local notifierStatusLabel = Instance.new("TextLabel")
+notifierStatusLabel.Position = UDim2.new(0, 15, 0, 122)
+notifierStatusLabel.Size = UDim2.new(1, -30, 0, 48)
+notifierStatusLabel.BackgroundTransparency = 1
+notifierStatusLabel.Text = "Status: Idle"
+notifierStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+notifierStatusLabel.Font = Enum.Font.SourceSans
+notifierStatusLabel.TextSize = 14
+notifierStatusLabel.TextWrapped = true
+notifierStatusLabel.Parent = notifierFrame
+
+-- Notification Popups Container (Bottom-Right)
+local notifyContainer = Instance.new("Frame")
+notifyContainer.Position = UDim2.new(1, -260, 1, -10)
+notifyContainer.AnchorPoint = Vector2.new(0, 1)
+notifyContainer.Size = UDim2.new(0, 250, 0, 0)
+notifyContainer.BackgroundTransparency = 1
+notifyContainer.Parent = gui
+
+local notifyLayout = Instance.new("UIListLayout")
+notifyLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+notifyLayout.Padding = UDim.new(0, 6)
+notifyLayout.Parent = notifyContainer
+
+local activeNotifierThread = nil
+local knownParts = {}
+
+local function createNotification(titleText, items)
+    local popup = Instance.new("Frame")
+    popup.Size = UDim2.new(1, 0, 0, 40 + (#items * 26))
+    popup.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    popup.BorderSizePixel = 2
+    popup.BorderColor3 = Color3.fromRGB(0, 170, 90)
+    popup.Parent = notifyContainer
+
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, -24, 0, 24)
+    header.Position = UDim2.new(0, 6, 0, 4)
+    header.BackgroundTransparency = 1
+    header.Text = titleText
+    header.TextColor3 = Color3.fromRGB(255, 255, 100)
+    header.Font = Enum.Font.SourceSansBold
+    header.TextSize = 14
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Parent = popup
+
+    local closePop = Instance.new("TextButton")
+    closePop.Size = UDim2.new(0, 18, 0, 18)
+    closePop.Position = UDim2.new(1, -22, 0, 4)
+    closePop.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+    closePop.Text = "X"
+    closePop.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closePop.Font = Enum.Font.SourceSansBold
+    closePop.TextSize = 12
+    closePop.Parent = popup
+
+    closePop.MouseButton1Click:Connect(function()
+        popup:Destroy()
+    end)
+
+    for idx, item in ipairs(items) do
+        local tpBtn = Instance.new("TextButton")
+        tpBtn.Size = UDim2.new(1, -12, 0, 22)
+        tpBtn.Position = UDim2.new(0, 6, 0, 28 + ((idx - 1) * 26))
+        tpBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 210)
+        tpBtn.Text = "TP to: " .. item.Name .. " #" .. idx
+        tpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        tpBtn.Font = Enum.Font.SourceSans
+        tpBtn.TextSize = 13
+        tpBtn.Parent = popup
+
+        tpBtn.MouseButton1Click:Connect(function()
+            local char = player.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local pos = getPosition(item)
+            if root and pos then
+                root.CFrame = CFrame.new(pos)
+            end
+        end)
+    end
+end
+
+local function stopMonitoring()
+    if activeNotifierThread then
+        task.cancel(activeNotifierThread)
+        activeNotifierThread = nil
+    end
+    knownParts = {}
+    startNotifierBtn.Text = "Start Monitoring (5s Loop)"
+    startNotifierBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+    notifierStatusLabel.Text = "Status: Idle"
+end
+
+startNotifierBtn.MouseButton1Click:Connect(function()
+    if activeNotifierThread then
+        stopMonitoring()
+        return
+    end
+
+    local targetName = notifierInput.Text:gsub("^%s+", ""):gsub("%s+$", "")
+    if targetName == "" then
+        notifierStatusLabel.Text = "Status: Please enter a target name!"
+        return
+    end
+
+    startNotifierBtn.Text = "Stop Monitoring"
+    startNotifierBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+    notifierStatusLabel.Text = "Monitoring: " .. targetName
+
+    activeNotifierThread = task.spawn(function()
+        local isFirstCheck = true
+        while true do
+            local currentMatches = findMatches(targetName)
+            
+            if isFirstCheck then
+                isFirstCheck = false
+                if #currentMatches > 0 then
+                    for _, item in ipairs(currentMatches) do
+                        knownParts[item] = true
+                    end
+                    createNotification(#currentMatches .. " Item(s) already out there", currentMatches)
+                end
+            else
+                local newlySpawned = {}
+                for _, item in ipairs(currentMatches) do
+                    if not knownParts[item] then
+                        knownParts[item] = true
+                        table.insert(newlySpawned, item)
+                    end
+                end
+
+                if #newlySpawned > 0 then
+                    createNotification("Item Spawned! (" .. #newlySpawned .. " new)", newlySpawned)
+                end
+            end
+
+            task.wait(5)
+        end
+    end)
+end)
+
+notifierToggleBtn.MouseButton1Click:Connect(function()
+    notifierFrame.Visible = not notifierFrame.Visible
+end)
+
+closeNotifierBtn.MouseButton1Click:Connect(function()
+    notifierFrame.Visible = false
+end)
+
+-- Auto search once initially
+doSearch()
