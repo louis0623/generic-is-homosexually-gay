@@ -1,30 +1,264 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local SoundService = game:GetService("SoundService")
+local ContentProvider = game:GetService("ContentProvider")
+local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 
--- Main GUI
 local gui = Instance.new("ScreenGui")
 gui.Name = "PartFinderGUI"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
+local activeNotifierThread = nil
+local lineConnection = nil
+local linePart = nil
+local currentTarget = nil
+local currentESPButton = nil
+
+local function makeHeaderDraggable(headerFrame, mainFrame)
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    headerFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = mainFrame.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    headerFrame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            mainFrame.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+local function playOpenAnim(frame, targetSize, targetPos)
+    frame.Size = UDim2.new(0, 0, 0, 0)
+    frame.Position = UDim2.new(targetPos.X.Scale, targetPos.X.Offset + (targetSize.X.Offset / 2), targetPos.Y.Scale, targetPos.Y.Offset + (targetSize.Y.Offset / 2))
+    frame.Visible = true
+    
+    TweenService:Create(frame, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        Size = targetSize,
+        Position = targetPos
+    }):Play()
+end
+
+local function playCloseAnim(frame, targetSize, targetPos, onComplete)
+    local centerPos = UDim2.new(targetPos.X.Scale, targetPos.X.Offset + (targetSize.X.Offset / 2), targetPos.Y.Scale, targetPos.Y.Offset + (targetSize.Y.Offset / 2))
+    local tween = TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+        Size = UDim2.new(0, 0, 0, 0),
+        Position = centerPos
+    })
+    
+    tween.Completed:Connect(function()
+        frame.Visible = false
+        frame.Size = targetSize
+        frame.Position = targetPos
+        if onComplete then onComplete() end
+    end)
+    tween:Play()
+end
+
+local function cleanupAll()
+    if lineConnection then
+        lineConnection:Disconnect()
+        lineConnection = nil
+    end
+    
+    if activeNotifierThread then
+        task.cancel(activeNotifierThread)
+        activeNotifierThread = nil
+    end
+    
+    if linePart then
+        linePart:Destroy()
+        linePart = nil
+    end
+    
+    if gui then
+        gui:Destroy()
+    end
+end
+
+local mainSize = UDim2.fromOffset(420, 560)
+local mainPos = UDim2.new(0.5, -210, 0.5, -280)
+
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(420, 560) -- Slightly expanded height for extra button
-frame.Position = UDim2.new(0.5, -210, 0.5, -280)
+frame.Size = mainSize
+frame.Position = mainPos
 frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 frame.BackgroundTransparency = 0.05
 frame.Active = true
-frame.Draggable = true
+frame.Draggable = false
+frame.Visible = false
 frame.Parent = gui
 
+local mainHeaderBar = Instance.new("Frame")
+mainHeaderBar.Size = UDim2.new(1, 0, 0, 36)
+mainHeaderBar.Position = UDim2.new(0, 0, 0, 0)
+mainHeaderBar.BackgroundTransparency = 1
+mainHeaderBar.Active = true
+mainHeaderBar.Parent = frame
+
+makeHeaderDraggable(mainHeaderBar, frame)
+
+local closeMainBtn = Instance.new("TextButton")
+closeMainBtn.Position = UDim2.new(1, -32, 0, 5)
+closeMainBtn.Size = UDim2.new(0, 26, 0, 26)
+closeMainBtn.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+closeMainBtn.Text = "X"
+closeMainBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeMainBtn.Font = Enum.Font.SourceSansBold
+closeMainBtn.TextSize = 16
+closeMainBtn.Parent = mainHeaderBar
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 4)
+closeCorner.Parent = closeMainBtn
+
+closeMainBtn.MouseButton1Click:Connect(function()
+    playCloseAnim(frame, mainSize, mainPos, cleanupAll)
+end)
+
+local introSound = Instance.new("Sound")
+introSound.SoundId = "rbxassetid://77945592174630"
+introSound.Volume = 2.5
+introSound.Parent = SoundService
+
+local lightContainer = Instance.new("Frame")
+lightContainer.Size = UDim2.fromOffset(600, 300)
+lightContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
+lightContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+lightContainer.BackgroundTransparency = 1
+lightContainer.BorderSizePixel = 0
+lightContainer.Parent = gui
+
+local lightCore = Instance.new("ImageLabel")
+lightCore.Size = UDim2.new(1, 0, 1, 0)
+lightCore.Position = UDim2.new(0, 0, 0, 0)
+lightCore.BackgroundTransparency = 1
+lightCore.BorderSizePixel = 0
+lightCore.Image = "rbxassetid://5028857417"
+lightCore.ImageColor3 = Color3.fromRGB(0, 170, 255)
+lightCore.ImageTransparency = 0.8
+lightCore.Parent = lightContainer
+
+local lightRays = Instance.new("ImageLabel")
+lightRays.Size = UDim2.new(1.4, 0, 1.4, 0)
+lightRays.Position = UDim2.new(-0.2, 0, -0.2, 0)
+lightRays.BackgroundTransparency = 1
+lightRays.BorderSizePixel = 0
+lightRays.Image = "rbxassetid://4996891970"
+lightRays.ImageColor3 = Color3.fromRGB(80, 210, 255)
+lightRays.ImageTransparency = 0.85
+lightRays.Parent = lightContainer
+
+local titleSplash = Instance.new("TextLabel")
+titleSplash.Size = UDim2.new(0, 800, 0, 100)
+titleSplash.Position = UDim2.new(0.5, 0, 0.5, 0)
+titleSplash.AnchorPoint = Vector2.new(0.5, 0.5)
+titleSplash.BackgroundTransparency = 1
+titleSplash.BorderSizePixel = 0
+titleSplash.TextColor3 = Color3.fromRGB(180, 240, 255)
+titleSplash.Font = Enum.Font.Code
+titleSplash.TextSize = 54
+titleSplash.TextXAlignment = Enum.TextXAlignment.Center
+titleSplash.TextYAlignment = Enum.TextYAlignment.Center
+titleSplash.Text = ""
+titleSplash.Parent = gui
+
+task.spawn(function()
+    ContentProvider:PreloadAsync({introSound})
+    while not introSound.IsLoaded do
+        task.wait()
+    end
+
+    introSound:Play()
+
+    local targetText = "Made By FAIRY"
+    local glyphs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-="
+    
+    TweenService:Create(lightCore, TweenInfo.new(0.5), {ImageTransparency = 0.3}):Play()
+    TweenService:Create(lightRays, TweenInfo.new(0.5), {ImageTransparency = 0.4}):Play()
+
+    for step = 1, 22 do
+        local scrambled = ""
+        for i = 1, #targetText do
+            local char = targetText:sub(i, i)
+            if char == " " then
+                scrambled = scrambled .. " "
+            else
+                local randIdx = math.random(1, #glyphs)
+                scrambled = scrambled .. glyphs:sub(randIdx, randIdx)
+            end
+        end
+        titleSplash.Text = "_LOADING " .. scrambled
+        task.wait(0.04)
+    end
+
+    for i = 1, #targetText do
+        local revealed = targetText:sub(1, i)
+        local remaining = #targetText - i
+        local tail = ""
+        for _ = 1, remaining do
+            local randIdx = math.random(1, #glyphs)
+            tail = tail .. glyphs:sub(randIdx, randIdx)
+        end
+        titleSplash.Text = revealed .. tail
+        task.wait(0.05)
+    end
+    
+    titleSplash.Text = targetText
+
+    TweenService:Create(lightCore, TweenInfo.new(0.15), {ImageTransparency = 0.0, Size = UDim2.new(1.3, 0, 1.3, 0), Position = UDim2.new(-0.15, 0, -0.15, 0)}):Play()
+    task.wait(0.15)
+
+    local fadeInfo = TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    TweenService:Create(titleSplash, fadeInfo, {TextTransparency = 1}):Play()
+    TweenService:Create(lightCore, fadeInfo, {ImageTransparency = 1}):Play()
+    TweenService:Create(lightRays, fadeInfo, {ImageTransparency = 1}):Play()
+    
+    task.wait(0.8)
+    
+    lightContainer:Destroy()
+    titleSplash:Destroy()
+    introSound:Destroy()
+
+    playOpenAnim(frame, mainSize, mainPos)
+end)
+
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 32)
+title.Size = UDim2.new(1, -40, 1, 0)
+title.Position = UDim2.new(0, 10, 0, 0)
 title.BackgroundTransparency = 1
 title.Text = "Part Finder"
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
 title.Font = Enum.Font.SourceSansBold
 title.TextSize = 22
-title.Parent = frame
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = mainHeaderBar
 
 local inputBox = Instance.new("TextBox")
 inputBox.Position = UDim2.new(0, 10, 0, 40)
@@ -74,7 +308,6 @@ status.Font = Enum.Font.SourceSans
 status.TextSize = 14
 status.Parent = frame
 
--- Spawn Notifier Button
 local notifierToggleBtn = Instance.new("TextButton")
 notifierToggleBtn.Position = UDim2.new(0, 10, 1, -34)
 notifierToggleBtn.Size = UDim2.new(1, -20, 0, 28)
@@ -84,12 +317,6 @@ notifierToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 notifierToggleBtn.Font = Enum.Font.SourceSansBold
 notifierToggleBtn.TextSize = 16
 notifierToggleBtn.Parent = frame
-
--- ESP State
-local lineConnection
-local linePart
-local currentTarget
-local currentESPButton
 
 local function deactivateLine()
     if lineConnection then
@@ -108,13 +335,36 @@ local function deactivateLine()
     currentESPButton = nil
 end
 
-local function findMatches(query)
+local function findMatches(query, catalogFilter, ignoreList)
     query = query:gsub("^%s+", ""):gsub("%s+$", "")
     if query == "" then return {} end
+    
+    local rootSearchScope = workspace
+    if catalogFilter and catalogFilter ~= "" then
+        for _, desc in workspace:GetDescendants() do
+            if desc.Name:lower() == catalogFilter:lower() then
+                rootSearchScope = desc
+                break
+            end
+        end
+    end
+
     local matches = {}
-    for _, v in workspace:GetDescendants() do
+    for _, v in rootSearchScope:GetDescendants() do
         if (v:IsA("BasePart") or v:IsA("Model")) and v.Name:lower() == query:lower() then
-            table.insert(matches, v)
+            local isIgnored = false
+            if ignoreList then
+                for _, ignoredName in ipairs(ignoreList) do
+                    if ignoredName ~= "" and v.Name:lower() == ignoredName:lower() then
+                        isIgnored = true
+                        break
+                    end
+                end
+            end
+            
+            if not isIgnored then
+                table.insert(matches, v)
+            end
         end
     end
     return matches
@@ -263,27 +513,37 @@ inputBox.FocusLost:Connect(function(enter)
     if enter then doSearch() end
 end)
 
--- ====================================================================
--- SPAWN NOTIFIER LOGIC
--- ====================================================================
+local notifierSize = UDim2.fromOffset(340, 280)
+local notifierPos = UDim2.new(0.5, -170, 0.5, -140)
 
 local notifierFrame = Instance.new("Frame")
-notifierFrame.Size = UDim2.fromOffset(300, 180)
-notifierFrame.Position = UDim2.new(0.5, -150, 0.5, -90)
+notifierFrame.Size = notifierSize
+notifierFrame.Position = notifierPos
 notifierFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
 notifierFrame.Active = true
-notifierFrame.Draggable = true
+notifierFrame.Draggable = false
 notifierFrame.Visible = false
 notifierFrame.Parent = gui
 
+local notifierHeaderBar = Instance.new("Frame")
+notifierHeaderBar.Size = UDim2.new(1, 0, 0, 32)
+notifierHeaderBar.Position = UDim2.new(0, 0, 0, 0)
+notifierHeaderBar.BackgroundTransparency = 1
+notifierHeaderBar.Active = true
+notifierHeaderBar.Parent = notifierFrame
+
+makeHeaderDraggable(notifierHeaderBar, notifierFrame)
+
 local notifierTitle = Instance.new("TextLabel")
-notifierTitle.Size = UDim2.new(1, 0, 0, 28)
+notifierTitle.Size = UDim2.new(1, -30, 1, 0)
+notifierTitle.Position = UDim2.new(0, 10, 0, 0)
 notifierTitle.BackgroundTransparency = 1
 notifierTitle.Text = "Spawn Notifier Config"
 notifierTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
 notifierTitle.Font = Enum.Font.SourceSansBold
 notifierTitle.TextSize = 18
-notifierTitle.Parent = notifierFrame
+notifierTitle.TextXAlignment = Enum.TextXAlignment.Left
+notifierTitle.Parent = notifierHeaderBar
 
 local closeNotifierBtn = Instance.new("TextButton")
 closeNotifierBtn.Position = UDim2.new(1, -28, 0, 4)
@@ -293,22 +553,44 @@ closeNotifierBtn.Text = "X"
 closeNotifierBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 closeNotifierBtn.Font = Enum.Font.SourceSansBold
 closeNotifierBtn.TextSize = 14
-closeNotifierBtn.Parent = notifierFrame
+closeNotifierBtn.Parent = notifierHeaderBar
 
 local notifierInput = Instance.new("TextBox")
-notifierInput.Position = UDim2.new(0, 15, 0, 40)
-notifierInput.Size = UDim2.new(1, -30, 0, 30)
+notifierInput.Position = UDim2.new(0, 15, 0, 34)
+notifierInput.Size = UDim2.new(1, -30, 0, 26)
 notifierInput.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
 notifierInput.PlaceholderText = "Target Part Name..."
 notifierInput.Text = ""
 notifierInput.TextColor3 = Color3.fromRGB(255, 255, 255)
 notifierInput.Font = Enum.Font.SourceSans
-notifierInput.TextSize = 16
+notifierInput.TextSize = 14
 notifierInput.Parent = notifierFrame
 
+local catalogInput = Instance.new("TextBox")
+catalogInput.Position = UDim2.new(0, 15, 0, 66)
+catalogInput.Size = UDim2.new(1, -30, 0, 26)
+catalogInput.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+catalogInput.PlaceholderText = "Catalog filter (subfolder in workspace/e.g. drops, loots) [Optional]"
+catalogInput.Text = ""
+catalogInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+catalogInput.Font = Enum.Font.SourceSans
+catalogInput.TextSize = 14
+catalogInput.Parent = notifierFrame
+
+local ignoreInput = Instance.new("TextBox")
+ignoreInput.Position = UDim2.new(0, 15, 0, 98)
+ignoreInput.Size = UDim2.new(1, -30, 0, 26)
+ignoreInput.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+ignoreInput.PlaceholderText = "Unwanted parts (comma separated, e.g. Trash, Coin)"
+ignoreInput.Text = ""
+ignoreInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+ignoreInput.Font = Enum.Font.SourceSans
+ignoreInput.TextSize = 13
+ignoreInput.Parent = notifierFrame
+
 local startNotifierBtn = Instance.new("TextButton")
-startNotifierBtn.Position = UDim2.new(0, 15, 0, 80)
-startNotifierBtn.Size = UDim2.new(1, -30, 0, 32)
+startNotifierBtn.Position = UDim2.new(0, 15, 0, 132)
+startNotifierBtn.Size = UDim2.new(1, -30, 0, 30)
 startNotifierBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
 startNotifierBtn.Text = "Start Monitoring (5s Loop)"
 startNotifierBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -316,22 +598,43 @@ startNotifierBtn.Font = Enum.Font.SourceSansBold
 startNotifierBtn.TextSize = 15
 startNotifierBtn.Parent = notifierFrame
 
+local showAttributes = true
+local toggleAttrBtn = Instance.new("TextButton")
+toggleAttrBtn.Position = UDim2.new(0, 15, 0, 168)
+toggleAttrBtn.Size = UDim2.new(1, -30, 0, 26)
+toggleAttrBtn.BackgroundColor3 = Color3.fromRGB(100, 60, 150)
+toggleAttrBtn.Text = "Attributes in Notification: ON"
+toggleAttrBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleAttrBtn.Font = Enum.Font.SourceSansBold
+toggleAttrBtn.TextSize = 13
+toggleAttrBtn.Parent = notifierFrame
+
+toggleAttrBtn.MouseButton1Click:Connect(function()
+    showAttributes = not showAttributes
+    if showAttributes then
+        toggleAttrBtn.Text = "Attributes in Notification: ON"
+        toggleAttrBtn.BackgroundColor3 = Color3.fromRGB(100, 60, 150)
+    else
+        toggleAttrBtn.Text = "Attributes in Notification: OFF"
+        toggleAttrBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
+    end
+end)
+
 local notifierStatusLabel = Instance.new("TextLabel")
-notifierStatusLabel.Position = UDim2.new(0, 15, 0, 122)
-notifierStatusLabel.Size = UDim2.new(1, -30, 0, 48)
+notifierStatusLabel.Position = UDim2.new(0, 15, 0, 200)
+notifierStatusLabel.Size = UDim2.new(1, -30, 0, 70)
 notifierStatusLabel.BackgroundTransparency = 1
 notifierStatusLabel.Text = "Status: Idle"
 notifierStatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
 notifierStatusLabel.Font = Enum.Font.SourceSans
-notifierStatusLabel.TextSize = 14
+notifierStatusLabel.TextSize = 13
 notifierStatusLabel.TextWrapped = true
 notifierStatusLabel.Parent = notifierFrame
 
--- Notification Popups Container (Bottom-Right)
 local notifyContainer = Instance.new("Frame")
-notifyContainer.Position = UDim2.new(1, -260, 1, -10)
+notifyContainer.Position = UDim2.new(1, -290, 1, -10)
 notifyContainer.AnchorPoint = Vector2.new(0, 1)
-notifyContainer.Size = UDim2.new(0, 250, 0, 0)
+notifyContainer.Size = UDim2.new(0, 280, 0, 0)
 notifyContainer.BackgroundTransparency = 1
 notifyContainer.Parent = gui
 
@@ -340,12 +643,15 @@ notifyLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
 notifyLayout.Padding = UDim.new(0, 6)
 notifyLayout.Parent = notifyContainer
 
-local activeNotifierThread = nil
 local knownParts = {}
 
 local function createNotification(titleText, items)
+    local itemHeight = showAttributes and 46 or 28
+    local popupHeight = 36 + (#items * itemHeight)
+    
     local popup = Instance.new("Frame")
-    popup.Size = UDim2.new(1, 0, 0, 40 + (#items * 26))
+    popup.Size = UDim2.new(1, 0, 0, 0)
+    popup.ClipsDescendants = true
     popup.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
     popup.BorderSizePixel = 2
     popup.BorderColor3 = Color3.fromRGB(0, 170, 90)
@@ -373,19 +679,27 @@ local function createNotification(titleText, items)
     closePop.Parent = popup
 
     closePop.MouseButton1Click:Connect(function()
-        popup:Destroy()
+        local closeTween = TweenService:Create(popup, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Size = UDim2.new(1, 0, 0, 0)})
+        closeTween.Completed:Connect(function() popup:Destroy() end)
+        closeTween:Play()
     end)
 
     for idx, item in ipairs(items) do
+        local rowFrame = Instance.new("Frame")
+        rowFrame.Size = UDim2.new(1, -12, 0, itemHeight - 4)
+        rowFrame.Position = UDim2.new(0, 6, 0, 28 + ((idx - 1) * itemHeight))
+        rowFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+        rowFrame.Parent = popup
+
         local tpBtn = Instance.new("TextButton")
-        tpBtn.Size = UDim2.new(1, -12, 0, 22)
-        tpBtn.Position = UDim2.new(0, 6, 0, 28 + ((idx - 1) * 26))
+        tpBtn.Size = UDim2.new(1, -8, 0, 22)
+        tpBtn.Position = UDim2.new(0, 4, 0, 2)
         tpBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 210)
-        tpBtn.Text = "TP to: " .. item.Name .. " #" .. idx
+        tpBtn.Text = "TP to " .. item.Name .. " #" .. idx
         tpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        tpBtn.Font = Enum.Font.SourceSans
-        tpBtn.TextSize = 13
-        tpBtn.Parent = popup
+        tpBtn.Font = Enum.Font.SourceSansBold
+        tpBtn.TextSize = 12
+        tpBtn.Parent = rowFrame
 
         tpBtn.MouseButton1Click:Connect(function()
             local char = player.Character
@@ -395,7 +709,31 @@ local function createNotification(titleText, items)
                 root.CFrame = CFrame.new(pos)
             end
         end)
+
+        if showAttributes then
+            local attributes = item:GetAttributes()
+            local attrStringList = {}
+            for key, val in pairs(attributes) do
+                table.insert(attrStringList, tostring(key) .. ": " .. tostring(val))
+            end
+
+            local attrText = #attrStringList > 0 and table.concat(attrStringList, " | ") or "No Attributes"
+
+            local attrLbl = Instance.new("TextLabel")
+            attrLbl.Size = UDim2.new(1, -8, 0, 16)
+            attrLbl.Position = UDim2.new(0, 4, 0, 24)
+            attrLbl.BackgroundTransparency = 1
+            attrLbl.Text = attrText
+            attrLbl.TextColor3 = Color3.fromRGB(180, 210, 255)
+            attrLbl.Font = Enum.Font.SourceSansItalic
+            attrLbl.TextSize = 11
+            attrLbl.TextXAlignment = Enum.TextXAlignment.Left
+            attrLbl.TextTruncate = Enum.TextTruncate.AtEnd
+            attrLbl.Parent = rowFrame
+        end
     end
+
+    TweenService:Create(popup, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, popupHeight)}):Play()
 end
 
 local function stopMonitoring()
@@ -416,19 +754,39 @@ startNotifierBtn.MouseButton1Click:Connect(function()
     end
 
     local targetName = notifierInput.Text:gsub("^%s+", ""):gsub("%s+$", "")
+    local catalogFilter = catalogInput.Text:gsub("^%s+", ""):gsub("%s+$", "")
+    local rawIgnore = ignoreInput.Text
+    
+    local ignoreList = {}
+    for partName in rawIgnore:gmatch("[^,]+") do
+        local cleaned = partName:gsub("^%s+", ""):gsub("%s+$", "")
+        if cleaned ~= "" then
+            table.insert(ignoreList, cleaned)
+        end
+    end
+
     if targetName == "" then
         notifierStatusLabel.Text = "Status: Please enter a target name!"
         return
     end
 
+    local initialMatches = findMatches(targetName, catalogFilter, ignoreList)
+    if #initialMatches > 10 then
+        notifierStatusLabel.Text = "warning! more than 10 items parts has detected,please use part searcher instead"
+        return
+    end
+
     startNotifierBtn.Text = "Stop Monitoring"
     startNotifierBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-    notifierStatusLabel.Text = "Monitoring: " .. targetName
+    
+    local filterMsg = catalogFilter ~= "" and ("\nCatalog: [" .. catalogFilter .. "]") or "\nCatalog: [Global Workspace]"
+    local ignoreMsg = #ignoreList > 0 and ("\nIgnored: " .. table.concat(ignoreList, ", ")) or ""
+    notifierStatusLabel.Text = "Monitoring: " .. targetName .. filterMsg .. ignoreMsg
 
     activeNotifierThread = task.spawn(function()
         local isFirstCheck = true
         while true do
-            local currentMatches = findMatches(targetName)
+            local currentMatches = findMatches(targetName, catalogFilter, ignoreList)
             
             if isFirstCheck then
                 isFirstCheck = false
@@ -458,12 +816,15 @@ startNotifierBtn.MouseButton1Click:Connect(function()
 end)
 
 notifierToggleBtn.MouseButton1Click:Connect(function()
-    notifierFrame.Visible = not notifierFrame.Visible
+    if notifierFrame.Visible then
+        playCloseAnim(notifierFrame, notifierSize, notifierPos)
+    else
+        playOpenAnim(notifierFrame, notifierSize, notifierPos)
+    end
 end)
 
 closeNotifierBtn.MouseButton1Click:Connect(function()
-    notifierFrame.Visible = false
+    playCloseAnim(notifierFrame, notifierSize, notifierPos)
 end)
 
--- Auto search once initially
 doSearch()
