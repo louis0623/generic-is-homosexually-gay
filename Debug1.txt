@@ -513,8 +513,9 @@ inputBox.FocusLost:Connect(function(enter)
     if enter then doSearch() end
 end)
 
-local notifierSize = UDim2.fromOffset(340, 280)
-local notifierPos = UDim2.new(0.5, -170, 0.5, -140)
+-- Increased width to 500px so placeholder text fits cleanly
+local notifierSize = UDim2.fromOffset(500, 280)
+local notifierPos = UDim2.new(0.5, -250, 0.5, -140)
 
 local notifierFrame = Instance.new("Frame")
 notifierFrame.Size = notifierSize
@@ -581,7 +582,7 @@ local ignoreInput = Instance.new("TextBox")
 ignoreInput.Position = UDim2.new(0, 15, 0, 98)
 ignoreInput.Size = UDim2.new(1, -30, 0, 26)
 ignoreInput.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
-ignoreInput.PlaceholderText = "Unwanted parts (comma separated, e.g. Trash, Coin)"
+ignoreInput.PlaceholderText = "Unwanted items (comma separated, e.g. Trash, Coin)"
 ignoreInput.Text = ""
 ignoreInput.TextColor3 = Color3.fromRGB(255, 255, 255)
 ignoreInput.Font = Enum.Font.SourceSans
